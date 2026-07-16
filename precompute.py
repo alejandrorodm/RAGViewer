@@ -45,7 +45,9 @@ def r4(arr):
 
 def main():
     print(f"Cargando modelos: {EMB_MODEL} + {CE_MODEL}")
-    emb_model = StaticModel.from_pretrained(EMB_MODEL)
+    # normalize=False: guardamos los vectores crudos (con sus magnitudes reales)
+    # para que la app pueda demostrar el efecto de normalizar en vivo.
+    emb_model = StaticModel.from_pretrained(EMB_MODEL, normalize=False)
     ce_model = CrossEncoder(CE_MODEL)
 
     docs_out = {}

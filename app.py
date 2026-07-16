@@ -17,6 +17,17 @@ from chunking import CONFIGS, apply_config
 
 st.set_page_config(page_title="RAG Viewer", page_icon="🔬", layout="wide")
 
+st.markdown("""<style>
+.block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1200px;}
+h1, h2, h3 {letter-spacing: -0.015em;}
+.rv-sub {color: #6b7280; margin: 0.15rem 0 0.7rem; font-size: 1.02rem;}
+.chip {display: inline-block; padding: 2px 11px; border-radius: 999px;
+       background: rgba(99,110,250,0.10); color: #4a54c4;
+       font-size: 0.76rem; font-family: monospace; margin: 0 6px 12px 0;}
+[data-testid="stMetric"] {background: rgba(128,128,128,0.06);
+       border-radius: 10px; padding: 10px 14px;}
+</style>""", unsafe_allow_html=True)
+
 DOC_COLORS = {"rag": "#636efa", "espacio": "#ef553b", "cafe": "#00cc96"}
 CHUNK_BG = ["rgba(99,110,250,0.18)", "rgba(0,204,150,0.18)"]
 OVERLAP_BG = "rgba(239,85,59,0.35)"
@@ -42,6 +53,13 @@ def euclidean(q, M):
 
 def dot(q, M):
     return M @ q
+
+
+def spearman(a, b):
+    """Correlación de Spearman entre dos criterios de ordenación (1 = rankings idénticos)."""
+    ra = np.argsort(np.argsort(a))
+    rb = np.argsort(np.argsort(b))
+    return float(np.corrcoef(ra, rb)[0, 1])
 
 
 def chunk_arrays(config_id):
@@ -81,17 +99,32 @@ metric_name = st.sidebar.radio(
     "Métrica de similitud", ["Coseno", "Euclídea", "Producto escalar"]
 )
 top_k = st.sidebar.slider("Top-k a recuperar", 3, 10, 5)
-
-st.sidebar.divider()
-st.sidebar.caption(
-    f"**Embeddings**: `{data['emb_model']}` ({data['dims']} dims)\n\n"
-    f"**Reranker**: `{data['ce_model']}`\n\n"
-    "Todo precomputado: esta página es 100 % estática."
+normalize = st.sidebar.toggle(
+    "Normalizar embeddings (L2)",
+    value=False,
+    help="Reescala cada vector a longitud 1 antes de calcular las métricas. "
+    "Con vectores unitarios, coseno y euclídea producen el mismo ranking: "
+    "la explicación, en la pestaña 📐.",
 )
 
+st.sidebar.divider()
+with st.sidebar.expander("⚙️ Detalles técnicos"):
+    st.markdown(
+        f"**Embeddings**: `{data['emb_model']}` ({data['dims']} dims)\n\n"
+        f"**Reranker**: `{data['ce_model']}`\n\n"
+        "Los modelos se ejecutaron una sola vez en la fase de precomputación; "
+        "esta página es 100 % estática y el álgebra corre en tu navegador."
+    )
+
 query = data["queries"][query_idx]
-q_emb = np.array(query["emb"])
-chunks, embs = chunk_arrays(config_id)
+q_raw = np.array(query["emb"])
+chunks, embs_raw = chunk_arrays(config_id)
+
+if normalize:
+    embs = embs_raw / np.linalg.norm(embs_raw, axis=1, keepdims=True)
+    q_emb = q_raw / np.linalg.norm(q_raw)
+else:
+    embs, q_emb = embs_raw, q_raw
 
 cos_scores = cosine(q_emb, embs)
 euc_dists = euclidean(q_emb, embs)
@@ -107,6 +140,18 @@ elif metric_name == "Euclídea":
 else:
     order = np.argsort(-dot_scores)
     metric_vals = dot_scores
+
+# ---------------------------------------------------------------- header
+st.markdown(
+    f'<h1 style="margin-bottom:0">🔬 RAG Viewer</h1>'
+    f'<p class="rv-sub">Chunking · embeddings · similitud · reranking — '
+    f'el pipeline de un RAG, abierto en canal.</p>'
+    f'<span class="chip">embeddings · {data["emb_model"].split("/")[-1]} · {data["dims"]}d</span>'
+    f'<span class="chip">reranker · {data["ce_model"].split("/")[-1]}</span>'
+    f'<span class="chip">chunks · {len(chunks)}</span>'
+    f'<span class="chip">100 % estático</span>',
+    unsafe_allow_html=True,
+)
 
 # ---------------------------------------------------------------- tabs
 tab_chunk, tab_map, tab_sim, tab_ret, tab_info = st.tabs(
@@ -267,11 +312,91 @@ with tab_sim:
                     f"<code>{vals[i]:.3f}</code></small>",
                     unsafe_allow_html=True,
                 )
-    st.caption(
-        "Con vectores **normalizados** (longitud 1), coseno y euclídea ordenan igual. "
-        "Estos embeddings no están normalizados, así que el producto escalar puede "
-        "favorecer chunks con vectores largos aunque el ángulo sea peor."
-    )
+    if normalize:
+        st.caption(
+            "Embeddings **normalizados**: coseno y euclídea dan exactamente el mismo ranking, "
+            "y el producto escalar coincide con el coseno."
+        )
+    else:
+        st.caption(
+            "Sin normalizar: la magnitud de cada vector «contamina» a la euclídea y al producto "
+            "escalar, y sus rankings divergen del coseno. Activa **Normalizar embeddings (L2)** "
+            "en la barra lateral y vuelve a mirar."
+        )
+
+    # ---------------- experimento: normalización -----------------
+    st.divider()
+    st.markdown("### 🧪 Por qué normalizar pone a coseno y euclídea de acuerdo")
+
+    cos_all = cosine(q_raw, embs_raw)
+    euc_raw_all = euclidean(q_raw, embs_raw)
+    embs_n = embs_raw / np.linalg.norm(embs_raw, axis=1, keepdims=True)
+    q_n = q_raw / np.linalg.norm(q_raw)
+    euc_norm_all = euclidean(q_n, embs_n)
+
+    rho_raw = spearman(-cos_all, euc_raw_all)
+    rho_norm = spearman(-cos_all, euc_norm_all)
+    top_cos = set(np.argsort(-cos_all)[:top_k].tolist())
+    ov_raw = len(top_cos & set(np.argsort(euc_raw_all)[:top_k].tolist()))
+    ov_norm = len(top_cos & set(np.argsort(euc_norm_all)[:top_k].tolist()))
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("ρ Spearman · crudos", f"{rho_raw:.3f}",
+              help="Acuerdo entre el ranking por coseno y por euclídea sobre los vectores tal cual. 1.000 = rankings idénticos.")
+    m2.metric("ρ Spearman · normalizados", f"{rho_norm:.3f}",
+              help="El mismo acuerdo tras reescalar todos los vectores a longitud 1.")
+    m3.metric(f"Top-{top_k} compartido · crudos", f"{ov_raw}/{top_k}",
+              help="Cuántos chunks aparecen a la vez en el top-k del coseno y en el de la euclídea.")
+    m4.metric(f"Top-{top_k} compartido · normalizados", f"{ov_norm}/{top_k}")
+
+    col_exp, col_math = st.columns([3, 2])
+    with col_exp:
+        xs = np.linspace(float(cos_all.min()), float(cos_all.max()), 100)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=cos_all, y=euc_raw_all, mode="markers", name="vectores crudos",
+            marker=dict(color="#636efa", size=8, opacity=0.6),
+        ))
+        fig2.add_trace(go.Scatter(
+            x=cos_all, y=euc_norm_all, mode="markers", name="normalizados (L2)",
+            marker=dict(color="#00cc96", size=8, opacity=0.8),
+        ))
+        fig2.add_trace(go.Scatter(
+            x=xs, y=np.sqrt(np.maximum(0, 2 - 2 * xs)), mode="lines",
+            name="teoría: d = √(2 − 2·cos θ)",
+            line=dict(color="#ef553b", dash="dash", width=2),
+        ))
+        fig2.update_layout(
+            height=440, margin=dict(l=10, r=10, t=30, b=10),
+            xaxis_title="similitud coseno (no cambia al normalizar)",
+            yaxis_title="distancia euclídea",
+            legend=dict(orientation="h", yanchor="bottom", y=1.0),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+        st.caption(
+            "Cada punto es un chunk comparado con la consulta actual. Crudos, forman una nube: "
+            "a igual ángulo hay distancias distintas. Normalizados, **todos caen sobre la curva "
+            "teórica**: la distancia queda completamente determinada por el ángulo."
+        )
+    with col_math:
+        st.markdown("**La derivación, en dos pasos.** Desarrollando el cuadrado de la distancia:")
+        st.latex(r"\|\vec a-\vec b\|^2=\underbrace{\|\vec a\|^2+\|\vec b\|^2}_{\text{magnitudes}}-2\,\vec a\cdot\vec b")
+        st.markdown(
+            "Con vectores unitarios ($\\|\\vec a\\|=\\|\\vec b\\|=1$) el término de magnitudes "
+            "se congela en $2$ y el producto escalar pasa a ser exactamente $\\cos\\theta$:"
+        )
+        st.latex(r"d=\sqrt{2-2\cos\theta}")
+        st.markdown(
+            "Esa función es **estrictamente decreciente** en $\\cos\\theta$: más coseno implica "
+            "siempre menos distancia. Ordenar por distancia mínima y por coseno máximo se vuelve "
+            "la *misma* ordenación — de ahí el ρ = 1.000 exacto.\n\n"
+            "Sin normalizar, $\\|\\vec b\\|$ varía de chunk a chunk (suele crecer con la longitud "
+            "del texto y la frecuencia de sus tokens), así que la euclídea mezcla *significado* "
+            "(ángulo) con *magnitud* (ruido) y los rankings se separan.\n\n"
+            "Por eso muchos modelos de embeddings devuelven vectores ya normalizados y la mayoría "
+            "de bases de datos vectoriales normalizan por defecto: coseno, euclídea y dot se "
+            "vuelven intercambiables y permiten usar el índice más rápido disponible."
+        )
 
 # ================================================================ retrieval
 with tab_ret:
@@ -283,6 +408,11 @@ with tab_ret:
         "su relevancia. Observa qué chunks suben ⬆ y cuáles caen ⬇ al aplicarlo."
     )
     st.info(f"**Consulta:** {query['text']}")
+    if normalize:
+        st.caption(
+            "Normalización L2 activada: con vectores unitarios, coseno y euclídea "
+            "devuelven exactamente el mismo top-k."
+        )
 
     retrieved = order[:top_k]
     ce_order = retrieved[np.argsort(-ce_scores[retrieved])]
