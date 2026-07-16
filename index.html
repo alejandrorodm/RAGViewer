@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RAG Viewer — las entrañas de un RAG</title>
+    <meta
+      name="description"
+      content="Visor interactivo de chunking, embeddings, métricas de similitud y reranking. 100% estático: Streamlit sobre WebAssembly (stlite)."
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.css"
+    />
+    <style>
+      #loading {
+        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        gap: 0.75rem;
+        color: #555;
+      }
+      #loading .big { font-size: 2.5rem; }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="loading">
+        <div class="big">🔬</div>
+        <div><b>RAG Viewer</b></div>
+        <div>Cargando Python en tu navegador (Pyodide)…</div>
+        <div><small>La primera carga tarda un poco; después queda cacheado.</small></div>
+      </div>
+    </div>
+    <script type="module">
+      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@0.85.1/build/stlite.js";
+
+      mount(
+        {
+          requirements: ["numpy", "plotly"],
+          entrypoint: "app.py",
+          files: {
+            "app.py": { url: "./app.py" },
+            "chunking.py": { url: "./chunking.py" },
+            "data/data.json": { url: "./data/data.json" },
+          },
+          streamlitConfig: {
+            "client.toolbarMode": "viewer",
+            "theme.base": "light",
+          },
+        },
+        document.getElementById("root")
+      );
+    </script>
+  </body>
+</html>

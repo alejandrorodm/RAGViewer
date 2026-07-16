@@ -1,0 +1,10 @@
+# Para ejecutar la app en local: streamlit run app.py
+streamlit
+numpy
+plotly
+
+# Solo para regenerar data/data.json (precompute.py):
+# model2vec
+# scikit-learn
+# sentence-transformers
+# torch  (instalar con: uv pip install torch --index-url https://download.pytorch.org/whl/cpu)
